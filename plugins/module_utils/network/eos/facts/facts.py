@@ -77,6 +77,9 @@ from ansible_collections.arista.eos.plugins.module_utils.network.eos.facts.route
 from ansible_collections.arista.eos.plugins.module_utils.network.eos.facts.prefix_lists.prefix_lists import (
     Prefix_listsFacts,
 )
+from ansible_collections.arista.eos.plugins.module_utils.network.eos.facts.resilient_ecmp.resilient_ecmp import (
+    Resilient_ecmpFacts,
+)
 
 
 FACT_LEGACY_SUBSETS = dict(
@@ -102,6 +105,7 @@ FACT_RESOURCE_SUBSETS = dict(
     bgp_global=Bgp_globalFacts,
     route_maps=Route_mapsFacts,
     prefix_lists=Prefix_listsFacts,
+    resilient_ecmp=Resilient_ecmpFacts,
 )
 
 
