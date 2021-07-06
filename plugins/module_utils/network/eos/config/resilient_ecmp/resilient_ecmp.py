@@ -24,25 +24,22 @@ class Resilient_ecmp(ConfigBase):
     The eos_resilient_ecmp class
     """
 
-    gather_subset = [
-        '!all',
-        '!min',
-    ]
+    gather_subset = ['!all', '!min']
 
-    gather_network_resources = [
-        'resilient_ecmp',
-    ]
+    gather_network_resources = ['resilient_ecmp']
 
     def __init__(self, module):
         super(Resilient_ecmp, self).__init__(module)
 
-    def get_resilient_ecmp_facts(self):
+    def get_resilient_ecmp_facts(self, data=None):
         """ Get the 'facts' (the current configuration)
 
         :rtype: A dictionary
         :returns: The current configuration as a dictionary
         """
-        facts, _warnings = Facts(self._module).get_facts(self.gather_subset, self.gather_network_resources)
+        facts, _warnings = Facts(self._module).get_facts(
+            self.gather_subset, self.gather_network_resources, data=data
+        )
         resilient_ecmp_facts = facts['ansible_network_resources'].get('resilient_ecmp')
         if not resilient_ecmp_facts:
             return []
@@ -58,19 +55,39 @@ class Resilient_ecmp(ConfigBase):
         warnings = list()
         commands = list()
 
-        existing_resilient_ecmp_facts = self.get_resilient_ecmp_facts()
-        commands.extend(self.set_config(existing_resilient_ecmp_facts))
-        if commands:
+        existing_resilient_ecmp_facts = []
+        if self.state in self.ACTION_STATES:
+            existing_resilient_ecmp_facts = self.get_resilient_ecmp_facts()
+
+        if self.state in self.ACTION_STATES or self.state == "rendered":
+            commands.extend(self.set_config(existing_resilient_ecmp_facts))
+
+        if commands and self.state in self.ACTION_STATES:
             if not self._module.check_mode:
                 self._connection.edit_config(commands)
             result['changed'] = True
-        result['commands'] = commands
 
-        changed_resilient_ecmp_facts = self.get_resilient_ecmp_facts()
+        changed_resilient_ecmp_facts = []
+        if self.state in self.ACTION_STATES or self.state == "gathered":
+            changed_resilient_ecmp_facts = self.get_resilient_ecmp_facts()
 
-        result['before'] = existing_resilient_ecmp_facts
-        if result['changed']:
-            result['after'] = changed_resilient_ecmp_facts
+        if self.state in self.ACTION_STATES:
+            result['commands'] = commands
+            result['before'] = existing_resilient_ecmp_facts
+            if result['changed']:
+                result['after'] = changed_resilient_ecmp_facts
+        elif self.state == "rendered":
+            result["rendered"] = commands
+        elif self.state == "gathered":
+            result["gathered"] = changed_resilient_ecmp_facts
+        elif self.state == "parsed":
+            if not self._module.params["running_config"]:
+                self._module.fail_json(
+                    msg="Value of running_config parameter must not be empty for state parsed"
+                )
+            result["parsed"] = self.get_resilient_ecmp_facts(
+                data=self._module.params["running_config"]
+            )
 
         result['warnings'] = warnings
         return result
@@ -99,11 +116,10 @@ class Resilient_ecmp(ConfigBase):
         """
         state = self._module.params['state']
         if state == 'overridden':
-            kwargs = {}
-            commands = self._state_overridden(**kwargs)
+            commands = self._state_overridden(want, have)
         elif state == 'deleted':
             commands = self._state_deleted(want, have)
-        elif state == 'merged':
+        elif state == 'merged' or self.state == "rendered":
             commands = self._state_merged(want, have)
         elif state == 'replaced':
             commands = self._state_replaced(want, have)
@@ -119,25 +135,28 @@ class Resilient_ecmp(ConfigBase):
                   to the desired configuration
         """
         commands = []
-        removeconfigs = []
-        addconfigs = []
+        remove_commands = []
+        add_commands = []
+
+        if not have:
+            commands = self._set_commands(want)
+            return commands
 
         for h in have:
             for w in want:
                 if h["afi"] == w["afi"]:
-                    haveconfigs = self._add_commands(h)
-                    wantconfigs = self._add_commands(w)
-                    addconfigs.extend(wantconfigs)
-                    removeconfigs.extend(list(set(haveconfigs) - set(wantconfigs)))
+                    have_commands = self._add_commands(h)
+                    want_commands = self._add_commands(w)
+                    add_commands.extend(list(set(want_commands) - set(have_commands)))
+                    remove_commands.extend(list(set(have_commands) - set(want_commands)))
 
-        for command in removeconfigs:
+        for command in remove_commands:
             commands.append("no " + command)
-        for wantcmd in addconfigs:
-            commands.append(wantcmd)
+        for command in add_commands:
+            commands.append(command)
         return commands
 
-    @staticmethod
-    def _state_overridden(**kwargs):
+    def _state_overridden(self, want, have):
         """ The command generator when state is overridden
 
         :rtype: A list
@@ -145,6 +164,14 @@ class Resilient_ecmp(ConfigBase):
                   to the desired configuration
         """
         commands = []
+        want_commands = self._set_commands(want)
+        have_commands = self._set_commands(have)
+        remove_commands = list(set(have_commands) - set(want_commands))
+        add_commands = list(set(want_commands) - set(have_commands))
+        for command in remove_commands:
+            commands.append("no " + command)
+        for command in add_commands:
+            commands.append(command)
         return commands
 
     def _state_merged(self, want, have):
@@ -154,7 +181,9 @@ class Resilient_ecmp(ConfigBase):
         :returns: the commands necessary to merge the provided into
                   the current configuration
         """
-        commands = self._set_commands(want, have)
+        want_commands = self._set_commands(want)
+        have_commands = self._set_commands(have)
+        commands = list(set(want_commands) - set(have_commands))
         return commands
 
     def _state_deleted(self, want, have):
@@ -165,25 +194,28 @@ class Resilient_ecmp(ConfigBase):
                   of the provided objects
         """
         commands = []
-        if not want:
-            for h in have:
-                return_command = self._add_commands(h)
-                for command in return_command:
-                    command = "no " + command
-                    commands.append(command)
-        else:
+        if want:
             for w in want:
                 return_command = self._del_commands(w, have)
                 for command in return_command:
                     commands.append(command)
+        else:
+            commands = self._reset_commands(have)
+
         return commands
 
-    def _set_commands(self, want, have):
+    def _set_commands(self, want):
         commands = []
         for w in want:
-            return_command = self._add_commands(w)
-            for command in return_command:
-                commands.append(command)
+            commands.extend(self._add_commands(w))
+        return commands
+
+    def _reset_commands(self, have):
+        commands = []
+        config_commands = self._set_commands(have)
+        for command in config_commands:
+            command = "no " + command
+            commands.append(command)
         return commands
 
     @staticmethod
@@ -209,30 +241,24 @@ class Resilient_ecmp(ConfigBase):
 
     def _del_commands(self, want, have):
         commandset = []
-        haveconfigs = []
-        for h in have:
-            return_command = self._add_commands(h)
-            for command in return_command:
-                command = "no " + command
-                haveconfigs.append(command)
+        haveconfigs = self._reset_commands(have)
 
-        for address_family in want:
-            afi = address_family['afi']
-            for command in haveconfigs:
-                if (afi == "ipv6" and "ipv6" in command) or (afi == "ipv4" and "ip " in command):
-                    if "routes" in address_family and address_family["routes"]:
-                        for route in address_family["routes"]:
-                            if route['dest'] in command:
-                                if "capacity" in route and route["capacity"] and "redundancy" in route and \
-                                        route['redundancy']:
-                                    sub_command = "capacity {} redundancy {}".format(
-                                        str(route["capacity"]),
-                                        str(route['redundancy'])
-                                    )
-                                    if sub_command in command:
-                                        commandset.append(command)
-                                else:
+        afi = want['afi']
+        for command in haveconfigs:
+            if (afi == "ipv6" and "ipv6" in command) or (afi == "ipv4" and "ip " in command):
+                if "routes" in want and want["routes"]:
+                    for route in want["routes"]:
+                        if route['dest'] in command:
+                            if "capacity" in route and route["capacity"] and "redundancy" in route and \
+                                    route['redundancy']:
+                                sub_command = "capacity {} redundancy {}".format(
+                                    str(route["capacity"]),
+                                    str(route['redundancy'])
+                                )
+                                if sub_command in command:
                                     commandset.append(command)
-                    else:
-                        commandset.append(command)
+                            else:
+                                commandset.append(command)
+                else:
+                    commandset.append(command)
         return commandset

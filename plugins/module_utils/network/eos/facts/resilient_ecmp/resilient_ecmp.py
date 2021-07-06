@@ -50,13 +50,18 @@ class Resilient_ecmpFacts(object):
         :returns: facts
         """
 
-        if not data:
-            data = self.get_device_data(connection)
+        if data:
+            resource_delim = "ip.* hardware fib ecmp resilience"
+            find_pattern = r"(?:^|\n)%s.*" % resource_delim
+            resilient_ecmp_config_list = [p.strip() for p in re.findall(find_pattern, data)]
+            resilient_ecmp_config = "\n".join(resilient_ecmp_config_list)
+        else:
+            resilient_ecmp_config = self.get_device_data(connection)
 
         # Build separate lists for IPv4 and IPv6 commands
         resources_ipv4 = []
         resources_ipv6 = []
-        for command in data.splitlines():
+        for command in resilient_ecmp_config.splitlines():
             if "ipv6" in command:
                 resources_ipv6.append(command)
             else:
